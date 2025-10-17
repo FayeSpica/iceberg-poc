@@ -1,0 +1,40 @@
+[package]
+name = "ingress-iceberg"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP server for receiving ArrowStream data and writing to Iceberg"
+authors = ["Your Name <your.email@example.com>"]
+
+[dependencies]
+# HTTP server
+axum = "0.7"
+tokio = { version = "1.0", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Arrow
+arrow = "54.0"
+arrow-flight = "54.0"
+arrow-ipc = "54.0"
+
+# HTTP client for REST catalog
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async utilities
+futures = "0.3"
+
+# Configuration
+config = "0.14"
+
+# Base64 encoding/decoding
+base64 = "0.22"
