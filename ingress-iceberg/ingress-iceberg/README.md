@@ -96,7 +96,7 @@ src/
 
 - **axum**: HTTP server framework
 - **arrow**: Apache Arrow data processing
-- **reqwest**: HTTP client for REST catalog
+- **iceberg**/**iceberg-rest-catalog**: Iceberg table API and REST catalog client
 - **serde**: Serialization/deserialization
 - **tokio**: Async runtime
 
