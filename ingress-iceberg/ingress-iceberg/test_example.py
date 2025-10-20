@@ -52,7 +52,7 @@ def test_ingest_data():
     response = requests.post(
         "http://localhost:3000/ingest?table_name=test_table&namespace=default",
         data=arrow_data,
-        headers={"Content-Type": "application/octet-stream"}
+        headers={"Content-Type": "application/x-apache-arrow-stream"}
     )
     
     print(f"Status: {response.status_code}")

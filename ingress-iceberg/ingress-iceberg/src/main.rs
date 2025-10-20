@@ -120,13 +120,11 @@ mod tests {
         http::{Request, StatusCode},
     };
     use tower::ServiceExt;
-    use serde_json::json;
     use std::sync::Arc;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow::ipc::writer::StreamWriter;
-    use base64::{Engine as _, engine::general_purpose};
 
     async fn create_test_app_state() -> AppState {
         // Create a mock IcebergClient for testing
@@ -198,7 +196,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest?table_name=test_table&namespace=test_namespace")
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from(arrow_data))
             .unwrap();
 
@@ -220,7 +218,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest?table_name=test_table")
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from("invalid arrow data"))
             .unwrap();
 
@@ -240,7 +238,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest") // Missing table_name parameter
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from(arrow_data))
             .unwrap();
 
@@ -259,7 +257,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest?table_name=test_table&namespace=test_namespace")
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from("invalid-arrow-format"))
             .unwrap();
 
@@ -279,7 +277,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest?table_name=test_table") // No namespace provided, should default to "default"
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from(arrow_data))
             .unwrap();
 
@@ -324,7 +322,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/ingest?table_name=large_table&namespace=test_namespace")
-            .header("content-type", "application/octet-stream")
+            .header("content-type", "application/x-apache-arrow-stream")
             .body(Body::from(buffer))
             .unwrap();
 
