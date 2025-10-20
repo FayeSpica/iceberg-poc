@@ -32,6 +32,22 @@ impl ArrowStreamHandler {
             None => Err(anyhow::anyhow!("No record batch found in Arrow stream")),
         }
     }
+
+    pub async fn process_arrow_bytes(&self, arrow_bytes: &[u8]) -> anyhow::Result<RecordBatch> {
+        // Create a cursor to read the Arrow data directly from bytes
+        let cursor = Cursor::new(arrow_bytes);
+        
+        // Create a stream reader
+        let mut reader = StreamReader::try_new(cursor, None)
+            .map_err(|e| anyhow::anyhow!("Failed to create Arrow stream reader: {}", e))?;
+
+        // Read the first (and typically only) record batch
+        match reader.next() {
+            Some(Ok(batch)) => Ok(batch),
+            Some(Err(e)) => Err(anyhow::anyhow!("Failed to read Arrow record batch: {}", e)),
+            None => Err(anyhow::anyhow!("No record batch found in Arrow stream")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -157,5 +173,43 @@ mod tests {
         let processed_batch = result.unwrap();
         assert_eq!(processed_batch.num_rows(), 1000);
         assert_eq!(processed_batch.num_columns(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_process_arrow_bytes_success() {
+        let handler = ArrowStreamHandler::new();
+        let test_batch = create_test_record_batch();
+        let arrow_bytes = create_arrow_stream_bytes(&test_batch);
+
+        let result = handler.process_arrow_bytes(&arrow_bytes).await;
+        
+        assert!(result.is_ok());
+        let processed_batch = result.unwrap();
+        assert_eq!(processed_batch.num_rows(), 5);
+        assert_eq!(processed_batch.num_columns(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_process_arrow_bytes_invalid_data() {
+        let handler = ArrowStreamHandler::new();
+        let invalid_data = b"invalid arrow data";
+
+        let result = handler.process_arrow_bytes(invalid_data).await;
+        
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Failed to create Arrow stream reader"));
+    }
+
+    #[tokio::test]
+    async fn test_process_arrow_bytes_empty_data() {
+        let handler = ArrowStreamHandler::new();
+        let empty_data = b"";
+
+        let result = handler.process_arrow_bytes(empty_data).await;
+        
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Failed to create Arrow stream reader"));
     }
 }
