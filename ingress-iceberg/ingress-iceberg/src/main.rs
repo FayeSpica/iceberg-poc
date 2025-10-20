@@ -1,37 +1,14 @@
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::Json,
     routing::post,
     Router,
-    body::Bytes,
 };
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::info;
 
+use ingress_iceberg::types::{AppState, health_check, ingest_data};
 use ingress_iceberg::iceberg_client::IcebergClient;
 use ingress_iceberg::arrow_handler::ArrowStreamHandler;
-
-#[derive(Clone)]
-pub struct AppState {
-    iceberg_client: IcebergClient,
-    arrow_handler: ArrowStreamHandler,
-}
-
-#[derive(Deserialize)]
-pub struct IngestQuery {
-    table_name: String,
-    namespace: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct IngestResponse {
-    pub success: bool,
-    pub message: String,
-    pub records_ingested: Option<u64>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -70,47 +47,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn health_check() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "healthy",
-        "service": "ingress-iceberg"
-    }))
-}
-
-pub async fn ingest_data(
-    State(state): State<AppState>,
-    Query(query): Query<IngestQuery>,
-    body: Bytes,
-) -> Result<Json<IngestResponse>, StatusCode> {
-    info!("Received ingest request for table: {}", query.table_name);
-
-    match state.arrow_handler.process_arrow_bytes(&body).await {
-        Ok(record_batch) => {
-            match state.iceberg_client.write_to_table(
-                &query.namespace.unwrap_or_else(|| "default".to_string()),
-                &query.table_name,
-                record_batch,
-            ).await {
-                Ok(records_written) => {
-                    info!("Successfully wrote {} records to table {}", records_written, query.table_name);
-                    Ok(Json(IngestResponse {
-                        success: true,
-                        message: format!("Successfully ingested {} records", records_written),
-                        records_ingested: Some(records_written),
-                    }))
-                }
-                Err(e) => {
-                    error!("Failed to write to Iceberg table: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-        Err(e) => {
-            error!("Failed to process Arrow data: {}", e);
-            Err(StatusCode::BAD_REQUEST)
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

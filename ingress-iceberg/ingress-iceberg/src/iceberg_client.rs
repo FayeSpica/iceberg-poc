@@ -2,49 +2,118 @@ use arrow::record_batch::RecordBatch;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use anyhow::Result;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct TableMetadata {
+// Iceberg 0.7.0 compatible types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Namespace {
+    pub namespace: Vec<String>,
+    pub properties: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableIdentifier {
+    pub namespace: Vec<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Schema {
+    #[serde(rename = "type")]
+    pub schema_type: String,
+    pub fields: Vec<SchemaField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaField {
+    pub id: i32,
+    pub name: String,
+    pub required: bool,
+    #[serde(rename = "type")]
+    pub field_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionSpec {
+    #[serde(rename = "spec-id")]
+    pub spec_id: i32,
+    pub fields: Vec<PartitionField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionField {
+    #[serde(rename = "field-id")]
+    pub field_id: i32,
+    #[serde(rename = "source-id")]
+    pub source_id: i32,
+    pub name: String,
+    #[serde(rename = "transform")]
+    pub transform: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableMetadata {
     #[serde(rename = "table-name")]
-    table_name: String,
-    namespace: Vec<String>,
+    pub table_name: String,
+    pub namespace: Vec<String>,
     #[serde(rename = "table-type")]
-    table_type: String,
-    schema: serde_json::Value,
+    pub table_type: String,
+    pub schema: Schema,
     #[serde(rename = "current-schema-id")]
-    current_schema_id: i32,
+    pub current_schema_id: i32,
     #[serde(rename = "schemas")]
-    schemas: HashMap<String, serde_json::Value>,
+    pub schemas: HashMap<String, Schema>,
     #[serde(rename = "current-spec-id")]
-    current_spec_id: i32,
+    pub current_spec_id: i32,
     #[serde(rename = "specs")]
-    specs: HashMap<String, serde_json::Value>,
+    pub specs: HashMap<String, PartitionSpec>,
     #[serde(rename = "last-partition-id")]
-    last_partition_id: i32,
+    pub last_partition_id: i32,
     #[serde(rename = "default-spec-id")]
-    default_spec_id: i32,
+    pub default_spec_id: i32,
     #[serde(rename = "last-assigned-field-id")]
-    last_assigned_field_id: i32,
-    properties: HashMap<String, String>,
+    pub last_assigned_field_id: i32,
+    pub properties: HashMap<String, String>,
     #[serde(rename = "current-snapshot-id")]
-    current_snapshot_id: Option<i64>,
+    pub current_snapshot_id: Option<i64>,
     #[serde(rename = "refs")]
-    refs: HashMap<String, serde_json::Value>,
+    pub refs: HashMap<String, serde_json::Value>,
     #[serde(rename = "snapshot-log")]
-    snapshot_log: Vec<serde_json::Value>,
+    pub snapshot_log: Vec<serde_json::Value>,
     #[serde(rename = "metadata-log")]
-    metadata_log: Vec<serde_json::Value>,
+    pub metadata_log: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NamespaceList {
-    namespaces: Vec<Vec<String>>,
+    pub namespaces: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TableList {
     #[serde(rename = "identifiers")]
-    identifiers: Vec<serde_json::Value>,
+    pub identifiers: Vec<TableIdentifier>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CreateTableRequest {
+    pub name: String,
+    pub location: String,
+    pub schema: Schema,
+    #[serde(rename = "partition-spec")]
+    pub partition_spec: Vec<PartitionField>,
+    #[serde(rename = "write-order")]
+    pub write_order: WriteOrder,
+    #[serde(rename = "stage-create")]
+    pub stage_create: bool,
+    pub properties: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WriteOrder {
+    #[serde(rename = "order-id")]
+    pub order_id: i32,
+    pub fields: Vec<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -54,7 +123,8 @@ pub struct IcebergClient {
 }
 
 impl IcebergClient {
-    pub async fn new(base_url: String) -> anyhow::Result<Self> {
+    /// Create a new Iceberg client with REST catalog support
+    pub async fn new(base_url: String) -> Result<Self> {
         let client = Client::new();
         
         // Test connection to REST catalog
@@ -74,7 +144,8 @@ impl IcebergClient {
         Ok(Self { client, base_url })
     }
 
-    pub async fn ensure_namespace_exists(&self, namespace: &str) -> anyhow::Result<()> {
+    /// Ensure namespace exists, create if it doesn't
+    pub async fn ensure_namespace_exists(&self, namespace: &str) -> Result<()> {
         let namespaces: NamespaceList = self
             .client
             .get(&format!("{}/v1/namespaces", self.base_url))
@@ -87,10 +158,10 @@ impl IcebergClient {
         
         if !namespaces.namespaces.contains(&namespace_parts) {
             // Create namespace
-            let create_request = serde_json::json!({
-                "namespace": namespace_parts,
-                "properties": {}
-            });
+            let create_request = Namespace {
+                namespace: namespace_parts,
+                properties: HashMap::new(),
+            };
 
             self.client
                 .post(&format!("{}/v1/namespaces", self.base_url))
@@ -102,16 +173,15 @@ impl IcebergClient {
         Ok(())
     }
 
+    /// Ensure table exists, create if it doesn't
     pub async fn ensure_table_exists(
         &self,
         namespace: &str,
         table_name: &str,
-        schema: &serde_json::Value,
-    ) -> anyhow::Result<()> {
+        schema: &Schema,
+    ) -> Result<()> {
         self.ensure_namespace_exists(namespace).await?;
 
-        let _table_identifier = format!("{}.{}", namespace, table_name);
-        
         // Check if table exists
         let response = self
             .client
@@ -124,21 +194,21 @@ impl IcebergClient {
         }
 
         // Create table if it doesn't exist
-        let create_request = serde_json::json!({
-            "name": table_name,
-            "location": format!("s3://iceberg-data/{}/{}", namespace, table_name),
-            "schema": schema,
-            "partition-spec": [],
-            "write-order": {
-                "order-id": 0,
-                "fields": []
+        let create_request = CreateTableRequest {
+            name: table_name.to_string(),
+            location: format!("s3://iceberg-data/{}/{}", namespace, table_name),
+            schema: schema.clone(),
+            partition_spec: vec![],
+            write_order: WriteOrder {
+                order_id: 0,
+                fields: vec![],
             },
-            "stage-create": true,
-            "properties": {
-                "write.format.default": "parquet",
-                "write.metadata.metrics.default": "truncate(16)"
-            }
-        });
+            stage_create: true,
+            properties: HashMap::from([
+                ("write.format.default".to_string(), "parquet".to_string()),
+                ("write.metadata.metrics.default".to_string(), "truncate(16)".to_string()),
+            ]),
+        };
 
         self.client
             .post(&format!("{}/v1/namespaces/{}/tables", self.base_url, namespace))
@@ -149,12 +219,13 @@ impl IcebergClient {
         Ok(())
     }
 
+    /// Write data to an Iceberg table
     pub async fn write_to_table(
         &self,
         namespace: &str,
         table_name: &str,
         record_batch: RecordBatch,
-    ) -> anyhow::Result<u64> {
+    ) -> Result<u64> {
         // Convert Arrow schema to Iceberg schema
         let iceberg_schema = self.convert_arrow_schema_to_iceberg(&record_batch.schema())?;
         
@@ -182,7 +253,8 @@ impl IcebergClient {
         Ok(row_count)
     }
 
-    fn convert_arrow_schema_to_iceberg(&self, arrow_schema: &arrow::datatypes::Schema) -> anyhow::Result<serde_json::Value> {
+    /// Convert Arrow schema to Iceberg schema
+    fn convert_arrow_schema_to_iceberg(&self, arrow_schema: &arrow::datatypes::Schema) -> Result<Schema> {
         let mut fields = Vec::new();
         let mut field_id = 1;
 
@@ -207,19 +279,76 @@ impl IcebergClient {
                 _ => "string", // Default fallback
             };
 
-            fields.push(serde_json::json!({
-                "id": field_id,
-                "name": field.name(),
-                "required": !field.is_nullable(),
-                "type": iceberg_type
-            }));
+            fields.push(SchemaField {
+                id: field_id,
+                name: field.name().clone(),
+                required: !field.is_nullable(),
+                field_type: iceberg_type.to_string(),
+            });
 
             field_id += 1;
         }
 
-        Ok(serde_json::json!({
-            "type": "struct",
-            "fields": fields
-        }))
+        Ok(Schema {
+            schema_type: "struct".to_string(),
+            fields,
+        })
+    }
+
+    /// Get table metadata
+    pub async fn get_table_metadata(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
+        let response = self
+            .client
+            .get(&format!("{}/v1/namespaces/{}/tables/{}", self.base_url, namespace, table_name))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to get table metadata: {}",
+                response.status()
+            ));
+        }
+
+        let metadata: TableMetadata = response.json().await?;
+        Ok(metadata)
+    }
+
+    /// List tables in a namespace
+    pub async fn list_tables(&self, namespace: &str) -> Result<Vec<TableIdentifier>> {
+        let response = self
+            .client
+            .get(&format!("{}/v1/namespaces/{}/tables", self.base_url, namespace))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to list tables: {}",
+                response.status()
+            ));
+        }
+
+        let table_list: TableList = response.json().await?;
+        Ok(table_list.identifiers)
+    }
+
+    /// List namespaces
+    pub async fn list_namespaces(&self) -> Result<Vec<Vec<String>>> {
+        let response = self
+            .client
+            .get(&format!("{}/v1/namespaces", self.base_url))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to list namespaces: {}",
+                response.status()
+            ));
+        }
+
+        let namespace_list: NamespaceList = response.json().await?;
+        Ok(namespace_list.namespaces)
     }
 }
