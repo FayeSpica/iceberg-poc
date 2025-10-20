@@ -8,8 +8,8 @@ use axum::{
     Router,
     routing::post,
 };
-use serde_json::json;
 use tower::ServiceExt;
+use base64::{Engine as _, engine::general_purpose};
 
 async fn create_test_app() -> Router {
     // Create a mock IcebergClient for testing
@@ -36,17 +36,16 @@ async fn test_complete_arrow_stream_flow() {
     let app = create_test_app().await;
     let arrow_data = create_test_arrow_data();
     
-    let request_body = json!({
-        "table_name": "test_table",
-        "namespace": "test_namespace",
-        "data": arrow_data
-    });
+    // Decode base64 arrow data to raw bytes
+    let arrow_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&arrow_data)
+        .unwrap();
 
     let request = Request::builder()
         .method("POST")
-        .uri("/ingest")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+        .uri("/ingest?table_name=test_table&namespace=test_namespace")
+        .header("content-type", "application/x-apache-arrow-stream")
+        .body(Body::from(arrow_bytes))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -92,17 +91,16 @@ async fn test_multiple_ingest_requests() {
     
     // Test multiple requests to the same endpoint
     for i in 0..3 {
-        let request_body = json!({
-            "table_name": format!("test_table_{}", i),
-            "namespace": "test_namespace",
-            "data": arrow_data
-        });
+        // Decode base64 arrow data to raw bytes
+        let arrow_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&arrow_data)
+            .unwrap();
 
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri(&format!("/ingest?table_name=test_table_{}&namespace=test_namespace", i))
+            .header("content-type", "application/x-apache-arrow-stream")
+            .body(Body::from(arrow_bytes))
             .unwrap();
 
         let response = app.clone().oneshot(request).await.unwrap();
@@ -129,17 +127,16 @@ async fn test_different_arrow_schemas() {
     for (test_type, batch) in test_batches {
         let arrow_data = ArrowTestUtils::record_batch_to_base64(&batch);
         
-        let request_body = json!({
-            "table_name": format!("schema_test_table_{}", test_type),
-            "namespace": "test_namespace",
-            "data": arrow_data
-        });
+        // Decode base64 arrow data to raw bytes
+        let arrow_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&arrow_data)
+            .unwrap();
 
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri(&format!("/ingest?table_name=schema_test_table_{}&namespace=test_namespace", test_type))
+            .header("content-type", "application/x-apache-arrow-stream")
+            .body(Body::from(arrow_bytes))
             .unwrap();
 
         let response = app.clone().oneshot(request).await.unwrap();
@@ -154,12 +151,12 @@ async fn test_different_arrow_schemas() {
 async fn test_error_handling_flow() {
     let app = create_test_app().await;
     
-    // Test with invalid JSON
+    // Test with invalid Arrow data
     let request = Request::builder()
         .method("POST")
-        .uri("/ingest")
-        .header("content-type", "application/json")
-        .body(Body::from("invalid json"))
+        .uri("/ingest?table_name=test_table&namespace=test_namespace")
+        .header("content-type", "application/x-apache-arrow-stream")
+        .body(Body::from("invalid arrow data"))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -167,17 +164,11 @@ async fn test_error_handling_flow() {
     
     // Test with invalid base64 data
     let app = create_test_app().await;
-    let request_body = json!({
-        "table_name": "test_table",
-        "namespace": "test_namespace",
-        "data": "invalid-base64-data"
-    });
-
     let request = Request::builder()
         .method("POST")
-        .uri("/ingest")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+        .uri("/ingest?table_name=test_table&namespace=test_namespace")
+        .header("content-type", "application/x-apache-arrow-stream")
+        .body(Body::from("invalid-arrow-format"))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -191,17 +182,16 @@ async fn test_performance_with_large_dataset() {
     // Test with a large dataset
     let large_arrow_data = ArrowTestUtils::create_large_test_arrow_stream(10000);
     
-    let request_body = json!({
-        "table_name": "performance_test_table",
-        "namespace": "test_namespace",
-        "data": large_arrow_data
-    });
+    // Decode base64 arrow data to raw bytes
+    let arrow_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&large_arrow_data)
+        .unwrap();
 
     let request = Request::builder()
         .method("POST")
-        .uri("/ingest")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+        .uri("/ingest?table_name=performance_test_table&namespace=test_namespace")
+        .header("content-type", "application/x-apache-arrow-stream")
+        .body(Body::from(arrow_bytes))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -224,17 +214,16 @@ async fn test_concurrent_requests() {
         let arrow_data_clone = arrow_data.clone();
         
         let handle = tokio::spawn(async move {
-            let request_body = json!({
-                "table_name": format!("concurrent_test_table_{}", i),
-                "namespace": "test_namespace",
-                "data": arrow_data_clone
-            });
+            // Decode base64 arrow data to raw bytes
+            let arrow_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&arrow_data_clone)
+                .unwrap();
 
             let request = Request::builder()
                 .method("POST")
-                .uri("/ingest")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+                .uri(&format!("/ingest?table_name=concurrent_test_table_{}&namespace=test_namespace", i))
+                .header("content-type", "application/x-apache-arrow-stream")
+                .body(Body::from(arrow_bytes))
                 .unwrap();
 
             app_clone.oneshot(request).await
@@ -261,35 +250,21 @@ async fn test_malformed_requests() {
     // Test various malformed requests
     let malformed_requests = vec![
         // Missing table_name
-        json!({
-            "namespace": "test_namespace",
-            "data": "some_data"
-        }),
-        // Missing data
-        json!({
-            "table_name": "test_table",
-            "namespace": "test_namespace"
-        }),
-        // Invalid data type for table_name
-        json!({
-            "table_name": 123,
-            "namespace": "test_namespace",
-            "data": "some_data"
-        }),
+        "/ingest?namespace=test_namespace",
+        // Missing namespace (should default to "default")
+        "/ingest?table_name=test_table",
         // Empty table_name
-        json!({
-            "table_name": "",
-            "namespace": "test_namespace",
-            "data": "some_data"
-        }),
+        "/ingest?table_name=&namespace=test_namespace",
+        // Invalid characters in table_name
+        "/ingest?table_name=test%20table&namespace=test_namespace",
     ];
     
-    for (i, request_body) in malformed_requests.iter().enumerate() {
+    for (i, uri) in malformed_requests.iter().enumerate() {
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(request_body).unwrap()))
+            .uri(uri.to_string())
+            .header("content-type", "application/x-apache-arrow-stream")
+            .body(Body::from("some arrow data"))
             .unwrap();
 
         let response = app.clone().oneshot(request).await.unwrap();
