@@ -31,10 +31,7 @@ def create_sample_data():
     # Get the Arrow data as bytes
     arrow_data = sink.getvalue().to_pybytes()
     
-    # Encode as base64
-    base64_data = base64.b64encode(arrow_data).decode('utf-8')
-    
-    return base64_data
+    return arrow_data
 
 def test_health_check():
     """Test the health check endpoint."""
@@ -51,18 +48,11 @@ def test_ingest_data():
     # Create sample Arrow data
     arrow_data = create_sample_data()
     
-    # Prepare the request
-    payload = {
-        "table_name": "test_table",
-        "namespace": "default",
-        "data": arrow_data
-    }
-    
-    # Send the request
+    # Send the request with parameters in URL and Arrow data in body
     response = requests.post(
-        "http://localhost:3000/ingest",
-        json=payload,
-        headers={"Content-Type": "application/json"}
+        "http://localhost:3000/ingest?table_name=test_table&namespace=default",
+        data=arrow_data,
+        headers={"Content-Type": "application/octet-stream"}
     )
     
     print(f"Status: {response.status_code}")

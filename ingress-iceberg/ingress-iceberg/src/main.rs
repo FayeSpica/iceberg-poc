@@ -1,17 +1,18 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::Json,
     routing::post,
     Router,
+    body::Bytes,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tracing::{info, error};
 
-use crate::iceberg_client::IcebergClient;
-use crate::arrow_handler::ArrowStreamHandler;
+use ingress_iceberg::iceberg_client::IcebergClient;
+use ingress_iceberg::arrow_handler::ArrowStreamHandler;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,10 +21,9 @@ pub struct AppState {
 }
 
 #[derive(Deserialize)]
-pub struct IngestRequest {
+pub struct IngestQuery {
     table_name: String,
     namespace: Option<String>,
-    data: String, // Base64 encoded Arrow data
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,19 +79,20 @@ pub async fn health_check() -> Json<serde_json::Value> {
 
 pub async fn ingest_data(
     State(state): State<AppState>,
-    Json(payload): Json<IngestRequest>,
+    Query(query): Query<IngestQuery>,
+    body: Bytes,
 ) -> Result<Json<IngestResponse>, StatusCode> {
-    info!("Received ingest request for table: {}", payload.table_name);
+    info!("Received ingest request for table: {}", query.table_name);
 
-    match state.arrow_handler.process_arrow_data(&payload.data).await {
+    match state.arrow_handler.process_arrow_bytes(&body).await {
         Ok(record_batch) => {
             match state.iceberg_client.write_to_table(
-                &payload.namespace.unwrap_or_else(|| "default".to_string()),
-                &payload.table_name,
+                &query.namespace.unwrap_or_else(|| "default".to_string()),
+                &query.table_name,
                 record_batch,
             ).await {
                 Ok(records_written) => {
-                    info!("Successfully wrote {} records to table {}", records_written, payload.table_name);
+                    info!("Successfully wrote {} records to table {}", records_written, query.table_name);
                     Ok(Json(IngestResponse {
                         success: true,
                         message: format!("Successfully ingested {} records", records_written),
@@ -138,7 +139,7 @@ mod tests {
         }
     }
 
-    fn create_test_arrow_data() -> String {
+    fn create_test_arrow_data() -> Vec<u8> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
@@ -159,7 +160,7 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        general_purpose::STANDARD.encode(&buffer)
+        buffer
     }
 
     #[tokio::test]
@@ -194,17 +195,11 @@ mod tests {
             .with_state(app_state);
 
         let arrow_data = create_test_arrow_data();
-        let request_body = json!({
-            "table_name": "test_table",
-            "namespace": "test_namespace",
-            "data": arrow_data
-        });
-
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri("/ingest?table_name=test_table&namespace=test_namespace")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(arrow_data))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
@@ -216,66 +211,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ingest_data_invalid_json() {
-        let app_state = create_test_app_state().await;
-        let app = Router::new()
-            .route("/ingest", post(ingest_data))
-            .with_state(app_state);
-
-        let request = Request::builder()
-            .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from("invalid json"))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn test_ingest_data_missing_fields() {
-        let app_state = create_test_app_state().await;
-        let app = Router::new()
-            .route("/ingest", post(ingest_data))
-            .with_state(app_state);
-
-        let request_body = json!({
-            "table_name": "test_table"
-            // Missing 'data' field
-        });
-
-        let request = Request::builder()
-            .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
     async fn test_ingest_data_invalid_arrow_data() {
         let app_state = create_test_app_state().await;
         let app = Router::new()
             .route("/ingest", post(ingest_data))
             .with_state(app_state);
 
-        let request_body = json!({
-            "table_name": "test_table",
-            "namespace": "test_namespace",
-            "data": "invalid-base64-data"
-        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest?table_name=test_table")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from("invalid arrow data"))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_data_missing_table_name() {
+        let app_state = create_test_app_state().await;
+        let app = Router::new()
+            .route("/ingest", post(ingest_data))
+            .with_state(app_state);
+
+        let arrow_data = create_test_arrow_data();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest") // Missing table_name parameter
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(arrow_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_data_invalid_arrow_format() {
+        let app_state = create_test_app_state().await;
+        let app = Router::new()
+            .route("/ingest", post(ingest_data))
+            .with_state(app_state);
 
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri("/ingest?table_name=test_table&namespace=test_namespace")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from("invalid-arrow-format"))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
@@ -291,17 +276,11 @@ mod tests {
             .with_state(app_state);
 
         let arrow_data = create_test_arrow_data();
-        let request_body = json!({
-            "table_name": "test_table",
-            "data": arrow_data
-            // No namespace provided, should default to "default"
-        });
-
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri("/ingest?table_name=test_table") // No namespace provided, should default to "default"
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(arrow_data))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
@@ -341,19 +320,12 @@ mod tests {
             writer.write(&large_batch).unwrap();
             writer.finish().unwrap();
         }
-        
-        let arrow_data = general_purpose::STANDARD.encode(&buffer);
-        let request_body = json!({
-            "table_name": "large_table",
-            "namespace": "test_namespace",
-            "data": arrow_data
-        });
 
         let request = Request::builder()
             .method("POST")
-            .uri("/ingest")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+            .uri("/ingest?table_name=large_table&namespace=test_namespace")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(buffer))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
