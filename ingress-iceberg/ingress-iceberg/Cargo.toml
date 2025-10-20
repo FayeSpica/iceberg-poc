@@ -23,6 +23,10 @@ arrow = "54.0"
 arrow-flight = "54.0"
 arrow-ipc = "54.0"
 
+# Iceberg libraries (custom implementation to avoid dependency issues)
+# iceberg = "0.7.0"
+# iceberg-catalog-rest = "0.7.0"
+
 # HTTP client for REST catalog
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 

@@ -9,7 +9,7 @@ use axum::{
     routing::post,
 };
 use tower::ServiceExt;
-use base64::{Engine as _, engine::general_purpose};
+use base64::Engine as _;
 
 async fn create_test_app() -> Router {
     // Create a mock IcebergClient for testing
