@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  spark-iceberg:
+    image: tabulario/spark-iceberg:latest
+    container_name: spark-iceberg
+    ports:
+      - 8020:4040
+      - 8021:8888 # Spark Thrift Server (JDBC/ODBC)
+      - 8022:8080 # Spark Web UI
+      - 8023:10000 # Hive Metastore
+      - 8024:10001 # HiveServer2
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_REGION=us-east-1
+      - CATALOG_WAREHOUSE=s3://warehouse
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://192.168.31.179:9000
+    volumes:
+      - ./spark/conf:/opt/spark/conf
+    restart: unless-stopped
